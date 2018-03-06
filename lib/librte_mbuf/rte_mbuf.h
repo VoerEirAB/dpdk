@@ -48,6 +48,13 @@
 extern "C" {
 #endif
 
+
+/*
+* Disable CRC checksum offload
+*/
+#define PKT_TX_NO_CRC_CSUM   (1ULL << 48)
+
+
 /**
  * Get the name of a RX offload flag
  *
