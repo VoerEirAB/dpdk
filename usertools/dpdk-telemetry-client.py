@@ -3,31 +3,151 @@
 # Copyright(c) 2018 Intel Corporation
 
 from __future__ import print_function
+from __future__ import unicode_literals
 
-import socket
+import socket 
+import glob
 import os
 import sys
 import time
+import multiprocessing
+from prometheus_client import start_http_server, CollectorRegistry, Counter, Gauge
+import json
+# For parsing the command line argument during calling of the script
+import argparse 
 
 BUFFER_SIZE = 200000
+
+METRICS_PORT_PREFIX = "dpdk_port_"
+DEFAULT_SOCKET_PATH = "/var/run/dpdk/default_client"
+metrics = {}
 
 METRICS_REQ = "{\"action\":0,\"command\":\"ports_all_stat_values\",\"data\":null}"
 API_REG = "{\"action\":1,\"command\":\"clients\",\"data\":{\"client_path\":\""
 API_UNREG = "{\"action\":2,\"command\":\"clients\",\"data\":{\"client_path\":\""
-GLOBAL_METRICS_REQ = "{\"action\":0,\"command\":\"global_stat_values\",\"data\":null}"
-DEFAULT_FP = "/var/run/dpdk/default_client"
+
+metric = Gauge('dpdk_exporter_total', 'List of metrics related to DPDK Interface', ['podname', 'pciaddress', 'namespace', 'type', 'nodename'])
 
 try:
     raw_input  # Python 2
 except NameError:
     raw_input = input  # Python 3
 
+clients = []
+
+def parse_socketpath():
+    telemetry_paths = glob.glob('/var/run/dpdk/*/telemetry')
+    return telemetry_paths
+    
+def getNodeName():
+    nodename = socket.gethostname()
+    return nodename
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        '-t', '--telemetry-socket-path', type=str, default=None, nargs='+',
+        help='File path for telemetry socket.')
+
+    args = parser.parse_args()
+
+    telemetry_socket_paths = args.telemetry_socket_path
+
+    return telemetry_socket_paths 
+
+def get_clientPath(socketpath):
+    cpath = []
+    for spath in socketpath:
+        cpath.append(spath.replace("telemetry", ".client"))
+    
+    return cpath
+
+
+class Exporter:
+
+    def __init__(self,port):
+        self.port=port
+        
+        
+    def setup_clients(self,socketPaths,clientPaths):
+        global clients
+
+        exists = [i.clientpath for i in clients]
+
+        for cpath,spath in zip(clientPaths,socketPaths):
+            if cpath not in exists:
+                clients.append(Client(cpath,spath))
+
+    def register_and_fetch_metrics(self):
+        global clients
+        
+        while True:
+            socketPaths = parse_socketpath()
+       
+            clientPaths = get_clientPath(socketPaths)
+
+            self.setup_clients(socketPaths, clientPaths)
+
+            for client in clients:
+                
+                if not client.is_socket_bound(client.clientpath):
+                    client.register()
+                
+            
+                try:
+                    data = client.requestMetrics()
+                    self.parse_metrics_response(data)
+
+
+                except Exception as e:
+                    print(e)
+
+            time.sleep(5)
+        
+
+    def start_http(self):
+        start_http_server(self.port)
+
+    
+
+    
+    def parse_metrics_response(self, response):
+        metrics_data = json.loads(response)
+        prefix = METRICS_PORT_PREFIX
+        
+
+        stats=metrics_data['data'][0]['stats']
+
+        podname= metrics_data['data'][0]['podName'] 
+        pciaddress= metrics_data['data'][0]['pci_address'] 
+        namespace = metrics_data['data'][0]['namespace'] 
+        nodename = getNodeName()
+        for stat in stats:
+            full_metric_name = prefix + stat['name']
+            metric_key = ".".join([podname,pciaddress,full_metric_name])
+            
+            # if full_metric_name not in self.metrics:
+              
+            metrics[metric_key] = metric.labels(podname, pciaddress, namespace, full_metric_name, nodename).set(stat['value'])
+            metrics[metric_key]=stat['value']
+    
+
+    def collect(self):
+        with self.metrics_lock:
+            for metric in self.metrics.values():
+                yield metric
+    
+
+
+    
 class Socket:
 
     def __init__(self):
         self.send_fd = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         self.recv_fd = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         self.client_fd = None
+        
 
     def __del__(self):
         try:
@@ -35,99 +155,88 @@ class Socket:
             self.recv_fd.close()
             self.client_fd.close()
         except:
+            raise
             print("Error - Sockets could not be closed")
 
 class Client:
 
-    def __init__(self): # Creates a client instance
+    def __init__(self,clientpath,socketpath): # Creates a client instance
         self.socket = Socket()
-        self.file_path = None
-        self.choice = None
-        self.unregistered = 0
+        self.clientpath = clientpath  
+        self.socketpath = socketpath   
+        
+
 
     def __del__(self):
         try:
-            if self.unregistered == 0:
-                self.unregister();
+            self.unregister()
         except:
+            raise
             print("Error - Client could not be destroyed")
+    
 
-    def getFilepath(self, file_path): # Gets arguments from Command-Line and assigns to instance of client
-        self.file_path = file_path
+    def is_socket_bound(self,cpath):
+        return os.path.exists(cpath)
+
 
     def register(self): # Connects a client to DPDK-instance
-        if os.path.exists(self.file_path):
-            os.unlink(self.file_path)
-        try:
-            self.socket.recv_fd.bind(self.file_path)
-        except socket.error as msg:
-            print ("Error - Socket binding error: " + str(msg) + "\n")
+
+        if os.path.exists(self.clientpath):
+            os.unlink(self.clientpath)
+        while True:
+            try:
+
+                self.socket.recv_fd.bind(self.clientpath)
+                break
+            except socket.error as msg:
+                print ("Error - Socket binding error: " + str(msg) + "\n")
+                time.sleep(5)
         self.socket.recv_fd.settimeout(2)
-        self.socket.send_fd.connect("/var/run/dpdk/rte/telemetry")
-        JSON = (API_REG + self.file_path + "\"}}")
-        self.socket.send_fd.sendall(JSON)
+        self.socket.send_fd.connect(self.socketpath)
+        JSON = (API_REG + self.clientpath + "\"}}")
+        self.socket.send_fd.sendall(JSON.encode())
+
         self.socket.recv_fd.listen(1)
         self.socket.client_fd = self.socket.recv_fd.accept()[0]
 
+    def is_socket_connected(self):
+        try:
+        # The `send` method is used to test the socket connection
+            self.socket.client_fd.send(b'')
+            return True
+        except socket.error:
+            return False
+    
     def unregister(self): # Unregister a given client
-        self.socket.client_fd.send(API_UNREG + self.file_path + "\"}}")
-        self.socket.client_fd.close()
+
+        try:
+            self.socket.client_fd.send((API_UNREG + self.clientpath + "\"}}").encode())
+        finally:
+            try:    
+                del self.socket
+
+                os.unlink(self.clientpath)
+                os.unlink(self.socketpath)
+                clients.remove(self)
+
+            except Exception as e:
+                pass
+                print(e)
 
     def requestMetrics(self): # Requests metrics for given client
-        self.socket.client_fd.send(METRICS_REQ)
-        data = self.socket.client_fd.recv(BUFFER_SIZE)
-        print("\nResponse: \n", str(data))
-
-    def repeatedlyRequestMetrics(self, sleep_time): # Recursively requests metrics for given client
-        print("\nPlease enter the number of times you'd like to continuously request Metrics:")
-        n_requests = int(raw_input("\n:"))
-        print("\033[F") #Removes the user input from screen, cleans it up
-        print("\033[K")
-        for i in range(n_requests):
-            self.requestMetrics()
-            time.sleep(sleep_time)
-
-    def requestGlobalMetrics(self): #Requests global metrics for given client
-        self.socket.client_fd.send(GLOBAL_METRICS_REQ)
-        data = self.socket.client_fd.recv(BUFFER_SIZE)
-        print("\nResponse: \n", str(data))
-
-    def interactiveMenu(self, sleep_time): # Creates Interactive menu within the script
-        while self.choice != 4:
-            print("\nOptions Menu")
-            print("[1] Send for Metrics for all ports")
-            print("[2] Send for Metrics for all ports recursively")
-            print("[3] Send for global Metrics")
-            print("[4] Unregister client")
-
-            try:
-                self.choice = int(raw_input("\n:"))
-                print("\033[F") #Removes the user input for screen, cleans it up
-                print("\033[K")
-                if self.choice == 1:
-                    self.requestMetrics()
-                elif self.choice == 2:
-                    self.repeatedlyRequestMetrics(sleep_time)
-                elif self.choice == 3:
-                    self.requestGlobalMetrics()
-                elif self.choice == 4:
-                    self.unregister()
-                    self.unregistered = 1
-                else:
-                    print("Error - Invalid request choice")
-            except:
-                pass
-
+        try:
+            self.socket.client_fd.send(METRICS_REQ.encode())
+            data = self.socket.client_fd.recv(BUFFER_SIZE).decode()
+            return data
+        except Exception as e:
+            print(e)
+            self.unregister()
+            
+    
 if __name__ == "__main__":
 
-    sleep_time = 1
-    file_path = ""
-    if (len(sys.argv) == 2):
-        file_path = sys.argv[1]
-    else:
-        print("Warning - No filepath passed, using default (" + DEFAULT_FP + ").")
-        file_path = DEFAULT_FP
-    client = Client()
-    client.getFilepath(file_path)
-    client.register()
-    client.interactiveMenu(sleep_time)
+    port=8000
+
+    exporter=Exporter(port)
+    exporter.start_http()
+    exporter.register_and_fetch_metrics()
