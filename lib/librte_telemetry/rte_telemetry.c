@@ -8,6 +8,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <jansson.h>
+#include <stdlib.h>
 
 #include <rte_eal.h>
 #include <rte_ethdev.h>
@@ -324,6 +325,9 @@ rte_telemetry_json_format_port(struct telemetry_impl *telemetry,
 	int num_metrics, ret, err_ret;
 	json_t *port, *stats;
 	int i;
+	char pci_address[RTE_ETH_NAME_MAX_LEN];
+	char hostname[256];
+	char* namespace = getenv("NAMESPACE");
 
 	num_metrics = rte_metrics_get_names(NULL, 0);
 	if (num_metrics < 0) {
@@ -368,7 +372,26 @@ rte_telemetry_json_format_port(struct telemetry_impl *telemetry,
 		TELEMETRY_LOG_ERR("Port field cannot be set");
 		goto eperm_fail;
 	}
-
+	if ((int)port_id != RTE_METRICS_GLOBAL) {
+		rte_eth_dev_get_name_by_port(port_id, pci_address);
+		int result = gethostname(hostname, sizeof(hostname));
+		if (result == 0) {
+			ret = json_object_set_new(port, "podName", json_string(hostname));
+		}
+		else {
+			perror("gethostname() failed");
+		}
+		if (namespace != NULL) {
+			 ret = json_object_set_new(port, "namespace", json_string(namespace));
+		} else {
+			 printf("UNIX VARIABLE is not set in Enviroment\n");
+		}
+		ret = json_object_set_new(port, "pci_address", json_string(pci_address));
+		if (ret < 0) {
+			TELEMETRY_LOG_ERR("PCI address field cannot be set");
+			goto eperm_fail;
+		}
+	}
 	for (i = 0; i < num_metric_ids; i++) {
 		int metric_id = metric_ids[i];
 		int metric_index = -1;
@@ -1238,7 +1261,6 @@ rte_telemetry_parse_client_message(struct telemetry_impl *telemetry, char *buf)
 		TELEMETRY_LOG_WARN("Client_path value is not a string");
 		goto fail;
 	}
-
 	ret = rte_telemetry_register_client(telemetry,
 			json_string_value(client_path));
 	if (ret < 0) {
