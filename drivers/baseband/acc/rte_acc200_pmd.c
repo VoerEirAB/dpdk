@@ -2533,6 +2533,8 @@ acc200_enqueue_ldpc_dec_cb(struct rte_bbdev_queue_data *q_data,
 	int ret;
 	bool same_op = false;
 
+	printf("\n++++ reaching acc200_enqueue_ldpc_dec_cb ++++\n");
+
 	for (i = 0; i < num; ++i) {
 		/* Check if there are available space for further processing. */
 		if (unlikely(avail < 1)) {
@@ -2540,8 +2542,16 @@ acc200_enqueue_ldpc_dec_cb(struct rte_bbdev_queue_data *q_data,
 			break;
 		}
 		avail -= 1;
+		printf("\n-------------------------\n");
 
 		rte_bbdev_log(INFO, "Op %d %d %d %d %d %d %d %d %d %d %d %d\n",
+			i, ops[i]->ldpc_dec.op_flags, ops[i]->ldpc_dec.rv_index,
+			ops[i]->ldpc_dec.iter_max, ops[i]->ldpc_dec.iter_count,
+			ops[i]->ldpc_dec.basegraph, ops[i]->ldpc_dec.z_c,
+			ops[i]->ldpc_dec.n_cb, ops[i]->ldpc_dec.q_m,
+			ops[i]->ldpc_dec.n_filler, ops[i]->ldpc_dec.cb_params.e,
+			same_op);
+		printf("Op %d %d %d %d %d %d %d %d %d %d %d %d\n",
 			i, ops[i]->ldpc_dec.op_flags, ops[i]->ldpc_dec.rv_index,
 			ops[i]->ldpc_dec.iter_max, ops[i]->ldpc_dec.iter_count,
 			ops[i]->ldpc_dec.basegraph, ops[i]->ldpc_dec.z_c,

@@ -1682,6 +1682,7 @@ gen_qm6_llr(int8_t *llrs, uint32_t i, double N0, double llr_max)
 static void
 gen_qm4_llr(int8_t *llrs, uint32_t i, double N0, double llr_max)
 {
+	printf("\n---- gen_qm4_llr -----\n");
 	int qm = 4;
 	int qam = 16;
 	int m, k;
@@ -1727,6 +1728,7 @@ gen_qm4_llr(int8_t *llrs, uint32_t i, double N0, double llr_max)
 			llr_ = llr_max;
 		if (llr_ < -llr_max)
 			llr_ = -llr_max;
+		printf("\n---- llr_=%u----\n", (int8_t) llr_);
 		llrs[qm * i + k] = (int8_t) llr_;
 	}
 }
@@ -1759,6 +1761,7 @@ static void
 generate_llr_input(uint16_t n, struct rte_bbdev_op_data *inputs,
 		struct rte_bbdev_dec_op *ref_op)
 {
+	printf("\n ---- Inside generate_llr_input ---- \n");
 	struct rte_mbuf *m;
 	uint16_t qm;
 	uint32_t i, j, e, range;
@@ -1932,7 +1935,8 @@ check_dec_status_and_ordering(struct rte_bbdev_dec_op *op,
 			status += (1 << RTE_BBDEV_SYNDROME_ERROR);
 		}
 	}
-
+	printf("\n++++ status=%u ++++\n", status);
+	printf("\n++++ expected_status=%u ++++\n", expected_status);
 	TEST_ASSERT(status == expected_status,
 			"op_status (%d) != expected_status (%d)",
 			op->status, expected_status);
@@ -2236,6 +2240,7 @@ static int
 validate_dec_op(struct rte_bbdev_dec_op **ops, const uint16_t n,
 		struct rte_bbdev_dec_op *ref_op, const int vector_mask)
 {
+	printf("\n---- validate_dec_op ----\n");
 	unsigned int i;
 	int ret;
 	struct op_data_entries *hard_data_orig =
@@ -2252,6 +2257,7 @@ validate_dec_op(struct rte_bbdev_dec_op **ops, const uint16_t n,
 		hard_output = &ops_td->hard_output;
 		soft_output = &ops_td->soft_output;
 
+		printf("\n++++ IN for loop ++++\n");
 		if (vector_mask & TEST_BBDEV_VF_EXPECTED_ITER_COUNT)
 			TEST_ASSERT(ops_td->iter_count <= ref_td->iter_count,
 					"Returned iter_count (%d) > expected iter_count (%d)",
@@ -2326,10 +2332,14 @@ validate_ldpc_dec_op(struct rte_bbdev_dec_op **ops, const uint16_t n,
 		ret = check_dec_status_and_ordering(ops[i], i, ref_op->status);
 		TEST_ASSERT_SUCCESS(ret,
 				"Checking status and ordering for decoder failed");
-		if (vector_mask & TEST_BBDEV_VF_EXPECTED_ITER_COUNT)
+		if (vector_mask & TEST_BBDEV_VF_EXPECTED_ITER_COUNT){
+			printf("\n===== INSIDE IF VECTOR MASK =====\n");
 			TEST_ASSERT(ops_td->iter_count <= ref_td->iter_count,
 					"Returned iter_count (%d) > expected iter_count (%d)",
 					ops_td->iter_count, ref_td->iter_count);
+		}
+		printf("\n==== ops_td->iter_count = %u\n", ops_td->iter_count);
+		printf("\n==== ref_td->iter_count = %u\n", ref_td->iter_count);
 		/*
 		 * We can ignore output data when the decoding failed to
 		 * converge or for loop-back cases
@@ -2683,6 +2693,7 @@ static int
 run_test_case_on_device(test_case_function *test_case_func, uint8_t dev_id,
 		struct test_op_params *op_params)
 {
+	printf("\n++++ running tc on device ++++\n");
 	int t_ret, f_ret, socket_id = SOCKET_ID_ANY;
 	unsigned int i;
 	struct active_device *ad;
@@ -2987,6 +2998,7 @@ dequeue_event_callback(uint16_t dev_id,
 
 	if (test_vector.op_type == RTE_BBDEV_OP_TURBO_DEC) {
 		struct rte_bbdev_dec_op *ref_op = tp->op_params->ref_dec_op;
+		printf("\n---- dequeue_event_callback calling validate_dec_op ----\n");
 		ret = validate_dec_op(tp->dec_ops, num_ops, ref_op,
 				tp->op_params->vector_mask);
 		/* get the max of iter_count for all dequeued ops */
@@ -4519,6 +4531,7 @@ latency_test_dec(struct rte_mempool *mempool,
 		*total_time += last_time;
 
 		if (test_vector.op_type != RTE_BBDEV_OP_NONE) {
+			printf("\n---- latency_test_dec calling validate_dec_op ----\n");
 			ret = validate_dec_op(ops_deq, burst_sz, ref_op,
 					vector_mask);
 			TEST_ASSERT_SUCCESS(ret, "Validation failed!");
@@ -4610,6 +4623,7 @@ latency_test_ldpc_dec(struct rte_mempool *mempool,
 			retrieve_harq_ddr(dev_id, queue_id, ops_enq, burst_sz);
 
 		if (test_vector.op_type != RTE_BBDEV_OP_NONE) {
+			printf("\n++++ Here ++++\n");
 			ret = validate_ldpc_dec_op(ops_deq, burst_sz, ref_op,
 					vector_mask);
 			TEST_ASSERT_SUCCESS(ret, "Validation failed!");
@@ -5570,6 +5584,7 @@ offload_latency_empty_q_tc(void)
 static int
 latency_tc(void)
 {
+	printf("\n++++ running tc latency_tc ++++\n");
 	return run_test_case(latency_test);
 }
 
