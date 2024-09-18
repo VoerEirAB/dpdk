@@ -15,26 +15,7 @@ if enable_apps.length() == 0
 endif
 
 apps = [
-        'dumpcap',
-        'graph',
-        'pdump',
-        'proc-info',
-        'test-acl',
         'test-bbdev',
-        'test-cmdline',
-        'test-compress-perf',
-        'test-crypto-perf',
-        'test-dma-perf',
-        'test-eventdev',
-        'test-fib',
-        'test-flow-perf',
-        'test-gpudev',
-        'test-mldev',
-        'test-pipeline',
-        'test-pmd',
-        'test-regex',
-        'test-sad',
-        'test-security-perf',
 ]
 
 if get_option('tests')
