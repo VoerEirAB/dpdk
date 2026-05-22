@@ -290,11 +290,8 @@ parse_args(int argc, char **argv, struct test_params *tp)
 			tp->init_device = true;
 			break;
 		case 'd':
-            TEST_ASSERT(strlen(optarg) > 0, "Duration is not provided");
-            const char *p = optarg;
-			while (*p && isdigit((unsigned char)*p)) p++;
-			TEST_ASSERT(*p == '\0' && p != optarg,
-					"Duration provided is invalid");
+			TEST_ASSERT(strlen(optarg) > 0,
+					"Duration is not provided");
             tp->duration_sec = strtoul(optarg, NULL, 10);
     		TEST_ASSERT(optarg[0] != '-',
     		            "Duration must be non-negative");
