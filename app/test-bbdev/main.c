@@ -35,6 +35,7 @@ static struct test_params {
 	unsigned int iter_max;
 	char test_vector_filename[PATH_MAX];
 	bool init_device;
+	uint32_t duration_sec;
 } test_params;
 
 static struct test_commands_list commands_list =
@@ -163,6 +164,12 @@ get_init_device(void)
 	return test_params.init_device;
 }
 
+uint32_t
+get_duration_sec(void)
+{
+	return test_params.duration_sec;
+}
+
 static void
 print_usage(const char *prog_name)
 {
@@ -171,7 +178,8 @@ print_usage(const char *prog_name)
 	printf("***Usage: %s [EAL params] [-- [-n/--num-ops NUM_OPS]\n"
 			"\t[-b/--burst-size BURST_SIZE]\n"
 			"\t[-v/--test-vector VECTOR_FILE]\n"
-			"\t[-c/--test-cases TEST_CASE[,TEST_CASE,...]]]\n",
+			"\t[-c/--test-cases TEST_CASE[,TEST_CASE,...]]\n"
+			"\t[-d/--duration DURATION_SEC]\n",
 			prog_name);
 
 	printf("Available testcases: ");
@@ -200,12 +208,13 @@ parse_args(int argc, char **argv, struct test_params *tp)
 		{ "snr", 1, 0, 's' },
 		{ "iter_max", 6, 0, 't' },
 		{ "init-device", 0, 0, 'i'},
+		{ "duration", 1, 0, 'd' },
 		{ "help", 0, 0, 'h' },
 		{ NULL,  0, 0, 0 }
 	};
 	tp->iter_max = DEFAULT_ITER;
 
-	while ((opt = getopt_long(argc, argv, "hin:b:c:v:l:s:t:", lgopts,
+	while ((opt = getopt_long(argc, argv, "hin:b:c:v:l:s:t:d:", lgopts,
 			&option_index)) != EOF)
 		switch (opt) {
 		case 'n':
@@ -278,6 +287,11 @@ parse_args(int argc, char **argv, struct test_params *tp)
 		case 'i':
 			/* indicate fpga fec config required */
 			tp->init_device = true;
+			break;
+		case 'd':
+			TEST_ASSERT(strlen(optarg) > 0,
+					"Duration is not provided");
+			tp->duration_sec = strtoul(optarg, NULL, 10);
 			break;
 		case 'h':
 			print_usage(argv[0]);
