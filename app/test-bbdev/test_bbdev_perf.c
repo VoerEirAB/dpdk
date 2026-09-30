@@ -5552,6 +5552,48 @@ throughput_test(struct active_device *ad,
 	return ret;
 }
 
+/* Per-burst latency samples used for percentile reporting */
+static uint64_t *latency_samples;
+static uint32_t latency_samples_cnt;
+static uint32_t latency_samples_max;
+
+static void
+record_latency_sample(uint64_t t)
+{
+	if (latency_samples != NULL && latency_samples_cnt < latency_samples_max)
+		latency_samples[latency_samples_cnt++] = t;
+}
+
+static int
+cmp_u64(const void *a, const void *b)
+{
+	uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+
+	return (x > y) - (x < y);
+}
+
+static void
+print_latency_percentiles(void)
+{
+	static const double pcts[] = {50.0, 75.0, 90.0, 95.0, 99.0, 99.9, 99.99};
+	unsigned int i;
+
+	if (latency_samples == NULL || latency_samples_cnt == 0)
+		return;
+
+	qsort(latency_samples, latency_samples_cnt, sizeof(uint64_t), cmp_u64);
+	printf("Latency percentile distribution (%u samples):\n", latency_samples_cnt);
+	for (i = 0; i < RTE_DIM(pcts); i++) {
+		uint32_t idx = (uint32_t)ceil(pcts[i] / 100.0 * latency_samples_cnt);
+		uint64_t v;
+
+		idx = idx > 0 ? idx - 1 : 0;
+		v = latency_samples[idx];
+		printf("\tp%-6g: %" PRIu64 " cycles, %lg us\n", pcts[i], v,
+				(double)(v * 1000000) / (double)rte_get_tsc_hz());
+	}
+}
+
 static int
 latency_test_dec(struct rte_mempool *mempool,
 		struct test_buffers *bufs, struct rte_bbdev_dec_op *ref_op,
@@ -5619,6 +5661,7 @@ latency_test_dec(struct rte_mempool *mempool,
 		*max_time = RTE_MAX(*max_time, last_time);
 		*min_time = RTE_MIN(*min_time, last_time);
 		*total_time += last_time;
+		record_latency_sample(last_time);
 
 		if (test_vector.op_type != RTE_BBDEV_OP_NONE) {
 			ret = validate_dec_op(ops_deq, burst_sz, ref_op);
@@ -5723,6 +5766,7 @@ latency_test_ldpc_dec(struct rte_mempool *mempool,
 		*max_time = RTE_MAX(*max_time, last_time);
 		*min_time = RTE_MIN(*min_time, last_time);
 		*total_time += last_time;
+		record_latency_sample(last_time);
 
 		if (extDdr)
 			retrieve_harq_ddr(dev_id, queue_id, ops_enq, burst_sz);
@@ -5798,6 +5842,7 @@ latency_test_enc(struct rte_mempool *mempool,
 		*max_time = RTE_MAX(*max_time, last_time);
 		*min_time = RTE_MIN(*min_time, last_time);
 		*total_time += last_time;
+		record_latency_sample(last_time);
 
 		if (test_vector.op_type != RTE_BBDEV_OP_NONE) {
 			ret = validate_enc_op(ops_deq, burst_sz, ref_op);
@@ -5873,6 +5918,7 @@ latency_test_ldpc_enc(struct rte_mempool *mempool,
 		*max_time = RTE_MAX(*max_time, last_time);
 		*min_time = RTE_MIN(*min_time, last_time);
 		*total_time += last_time;
+		record_latency_sample(last_time);
 
 		if (test_vector.op_type != RTE_BBDEV_OP_NONE) {
 			ret = validate_ldpc_enc_op(ops_deq, burst_sz, ref_op);
@@ -6058,6 +6104,19 @@ validation_latency_test(struct active_device *ad,
 	op_type_str = rte_bbdev_op_type_str(op_type);
 	TEST_ASSERT_NOT_NULL(op_type_str, "Invalid op type: %u", op_type);
 
+	latency_samples_cnt = 0;
+	latency_samples_max = 0;
+	if (get_show_percentile() && (op_type == RTE_BBDEV_OP_TURBO_ENC ||
+			op_type == RTE_BBDEV_OP_LDPC_ENC ||
+			op_type == RTE_BBDEV_OP_TURBO_DEC ||
+			op_type == RTE_BBDEV_OP_LDPC_DEC)) {
+		latency_samples_max = num_to_process;
+		latency_samples = rte_malloc(NULL,
+				sizeof(uint64_t) * latency_samples_max, 0);
+		if (latency_samples == NULL)
+			latency_samples_max = 0;
+	}
+
 	printf("+ ------------------------------------------------------- +\n");
 	if (latency_flag)
 		printf("== test: latency\ndev:");
@@ -6106,8 +6165,11 @@ validation_latency_test(struct active_device *ad,
                       &min_time, &max_time);
 	} while (lat_tsc_end && rte_rdtsc_precise() < lat_tsc_end);
 
-	if (iter <= 0)
+	if (iter <= 0) {
+		rte_free(latency_samples);
+		latency_samples = NULL;
 		return TEST_FAILED;
+	}
 
 	printf("Operation latency:\n"
 			"\tavg: %lg cycles, %lg us\n"
@@ -6119,6 +6181,10 @@ validation_latency_test(struct active_device *ad,
 			(double)(min_time * 1000000) / (double)rte_get_tsc_hz(),
 			(double)max_time, (double)(max_time * 1000000) /
 			(double)rte_get_tsc_hz());
+
+	print_latency_percentiles();
+	rte_free(latency_samples);
+	latency_samples = NULL;
 
 	return TEST_SUCCESS;
 }
