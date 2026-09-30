@@ -4,10 +4,12 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <inttypes.h>
 #include <math.h>
 
 #include <rte_eal.h>
+#include <rte_bitops.h>
 #include <rte_common.h>
 #include <rte_dev.h>
 #include <rte_launch.h>
@@ -5552,6 +5554,140 @@ throughput_test(struct active_device *ad,
 	return ret;
 }
 
+#define LAT_HIST_SUB 16U
+#define LAT_HIST_SUB_BITS 4U
+#define LAT_HIST_BUCKETS 1024U
+#define LAT_HIST_USED_BUCKETS \
+	(LAT_HIST_SUB + (64U - LAT_HIST_SUB_BITS) * LAT_HIST_SUB)
+
+/* Fixed-size histogram used by the latency distribution reporting */
+static uint64_t lat_hist[LAT_HIST_BUCKETS];
+static uint64_t lat_hist_total;
+static bool latency_distribution_enabled;
+
+static uint32_t
+lat_hist_bucket(uint64_t value)
+{
+	uint32_t exponent, shift, sub;
+
+	if (value < LAT_HIST_SUB)
+		return (uint32_t)value;
+
+	exponent = 63U - rte_clz64(value);
+	shift = exponent - LAT_HIST_SUB_BITS;
+	sub = (uint32_t)(value >> shift) - LAT_HIST_SUB;
+
+	return (exponent - LAT_HIST_SUB_BITS + 1U) * LAT_HIST_SUB + sub;
+}
+
+/* Largest value that maps into bucket idx */
+static uint64_t
+lat_hist_upper(uint32_t idx)
+{
+	uint32_t e, sub;
+
+	if (idx < LAT_HIST_SUB)
+		return idx;
+	e = idx / LAT_HIST_SUB + LAT_HIST_SUB_BITS - 1;
+	sub = idx % LAT_HIST_SUB;
+	if (e >= 64)
+		return UINT64_MAX;
+	if (e == 63 && sub == LAT_HIST_SUB - 1U)
+		return UINT64_MAX;
+	return ((((uint64_t)LAT_HIST_SUB + sub + 1) << (e - LAT_HIST_SUB_BITS)) - 1);
+}
+
+/* Smallest value that maps into bucket idx */
+static uint64_t
+lat_hist_lower(uint32_t idx)
+{
+	uint32_t e, sub;
+
+	if (idx < LAT_HIST_SUB)
+		return idx;
+	e = idx / LAT_HIST_SUB + LAT_HIST_SUB_BITS - 1;
+	sub = idx % LAT_HIST_SUB;
+	if (e >= 64)
+		return UINT64_MAX;
+	return (((uint64_t)LAT_HIST_SUB + sub) << (e - LAT_HIST_SUB_BITS));
+}
+
+static inline double
+cycles_to_us(uint64_t cycles)
+{
+	return (double)cycles * 1000000.0 / (double)rte_get_tsc_hz();
+}
+
+static void
+record_latency_sample(uint64_t t)
+{
+	uint32_t bucket;
+
+	if (!latency_distribution_enabled)
+		return;
+
+	bucket = lat_hist_bucket(t);
+	lat_hist[bucket]++;
+	lat_hist_total++;
+}
+
+static void
+print_latency_histogram(void)
+{
+	uint32_t idx;
+
+	if (lat_hist_total == 0)
+		return;
+
+	printf("Latency histogram (%" PRIu64 " samples, inclusive bounds):\n",
+			lat_hist_total);
+	printf("LATENCY_HISTOGRAM_CSV_BEGIN\n");
+	printf("bucket,lower_cycles,upper_cycles,lower_us,upper_us,count\n");
+	for (idx = 0; idx < LAT_HIST_USED_BUCKETS; idx++) {
+		uint64_t lo = lat_hist_lower(idx);
+		uint64_t hi = lat_hist_upper(idx);
+
+		printf("%" PRIu32 ",%" PRIu64 ",%" PRIu64 ",%.17g,%.17g,%" PRIu64 "\n",
+				idx, lo, hi, cycles_to_us(lo), cycles_to_us(hi),
+				lat_hist[idx]);
+	}
+	printf("LATENCY_HISTOGRAM_CSV_END\n");
+}
+
+static void
+print_latency_percentiles(void)
+{
+	static const double pcts[] = {50.0, 75.0, 90.0, 95.0, 99.0, 99.9, 99.99};
+	unsigned int i;
+
+	if (lat_hist_total == 0)
+		return;
+
+	printf("Latency percentile distribution (%" PRIu64 " samples):\n",
+			lat_hist_total);
+	for (i = 0; i < RTE_DIM(pcts); i++) {
+		uint32_t bucket;
+		uint64_t target;
+		uint64_t cumulative = 0;
+		uint64_t v;
+
+		target = (uint64_t)ceil(pcts[i] / 100.0 * (double)lat_hist_total);
+		target = RTE_MAX(target, UINT64_C(1));
+		target = RTE_MIN(target, lat_hist_total);
+		for (bucket = 0; bucket < LAT_HIST_USED_BUCKETS; bucket++) {
+			cumulative += lat_hist[bucket];
+			if (cumulative >= target) {
+				v = lat_hist_upper(bucket);
+				break;
+			}
+		}
+		if (bucket == LAT_HIST_USED_BUCKETS)
+			v = UINT64_MAX;
+		printf("\tp%-6g: %" PRIu64 " cycles, %lg us\n", pcts[i], v,
+				cycles_to_us(v));
+	}
+}
+
 static int
 latency_test_dec(struct rte_mempool *mempool,
 		struct test_buffers *bufs, struct rte_bbdev_dec_op *ref_op,
@@ -5619,16 +5755,15 @@ latency_test_dec(struct rte_mempool *mempool,
 		*max_time = RTE_MAX(*max_time, last_time);
 		*min_time = RTE_MIN(*min_time, last_time);
 		*total_time += last_time;
+		record_latency_sample(last_time);
 
 		if (test_vector.op_type != RTE_BBDEV_OP_NONE) {
 			ret = validate_dec_op(ops_deq, burst_sz, ref_op);
 			TEST_ASSERT_SUCCESS(ret, "Validation failed!");
 		}
-
 		rte_bbdev_dec_op_free_bulk(ops_enq, deq);
 		dequeued += deq;
 	}
-
 	return i;
 }
 
@@ -5723,6 +5858,7 @@ latency_test_ldpc_dec(struct rte_mempool *mempool,
 		*max_time = RTE_MAX(*max_time, last_time);
 		*min_time = RTE_MIN(*min_time, last_time);
 		*total_time += last_time;
+		record_latency_sample(last_time);
 
 		if (extDdr)
 			retrieve_harq_ddr(dev_id, queue_id, ops_enq, burst_sz);
@@ -5798,6 +5934,7 @@ latency_test_enc(struct rte_mempool *mempool,
 		*max_time = RTE_MAX(*max_time, last_time);
 		*min_time = RTE_MIN(*min_time, last_time);
 		*total_time += last_time;
+		record_latency_sample(last_time);
 
 		if (test_vector.op_type != RTE_BBDEV_OP_NONE) {
 			ret = validate_enc_op(ops_deq, burst_sz, ref_op);
@@ -5873,6 +6010,7 @@ latency_test_ldpc_enc(struct rte_mempool *mempool,
 		*max_time = RTE_MAX(*max_time, last_time);
 		*min_time = RTE_MIN(*min_time, last_time);
 		*total_time += last_time;
+		record_latency_sample(last_time);
 
 		if (test_vector.op_type != RTE_BBDEV_OP_NONE) {
 			ret = validate_ldpc_enc_op(ops_deq, burst_sz, ref_op);
@@ -6058,6 +6196,15 @@ validation_latency_test(struct active_device *ad,
 	op_type_str = rte_bbdev_op_type_str(op_type);
 	TEST_ASSERT_NOT_NULL(op_type_str, "Invalid op type: %u", op_type);
 
+	latency_distribution_enabled = latency_flag && get_show_percentile() && (
+			op_type == RTE_BBDEV_OP_TURBO_ENC ||
+			op_type == RTE_BBDEV_OP_LDPC_ENC ||
+			op_type == RTE_BBDEV_OP_TURBO_DEC ||
+			op_type == RTE_BBDEV_OP_LDPC_DEC);
+	lat_hist_total = 0;
+	if (latency_distribution_enabled)
+		memset(lat_hist, 0, sizeof(lat_hist));
+
 	printf("+ ------------------------------------------------------- +\n");
 	if (latency_flag)
 		printf("== test: latency\ndev:");
@@ -6070,6 +6217,7 @@ validation_latency_test(struct active_device *ad,
 			rte_rdtsc_precise() + (uint64_t)get_duration_sec() * rte_get_tsc_hz()
 			: 0;
 	do {
+		int temp_iter = 0;
 		if (op_type == RTE_BBDEV_OP_TURBO_DEC)
 			iter += latency_test_dec(op_params->mp, bufs,
 					op_params->ref_dec_op, ad->dev_id, queue_id,
@@ -6105,8 +6253,11 @@ validation_latency_test(struct active_device *ad,
                       &min_time, &max_time);
 	} while (lat_tsc_end && rte_rdtsc_precise() < lat_tsc_end);
 
-	if (iter <= 0)
+	if (iter <= 0) {
+		latency_distribution_enabled = false;
+		lat_hist_total = 0;
 		return TEST_FAILED;
+	}
 
 	printf("Operation latency:\n"
 			"\tavg: %lg cycles, %lg us\n"
@@ -6118,6 +6269,13 @@ validation_latency_test(struct active_device *ad,
 			(double)(min_time * 1000000) / (double)rte_get_tsc_hz(),
 			(double)max_time, (double)(max_time * 1000000) /
 			(double)rte_get_tsc_hz());
+
+	if (latency_distribution_enabled) {
+		print_latency_percentiles();
+		print_latency_histogram();
+	}
+	latency_distribution_enabled = false;
+	lat_hist_total = 0;
 
 	return TEST_SUCCESS;
 }
