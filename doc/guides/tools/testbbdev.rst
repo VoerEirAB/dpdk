@@ -94,7 +94,7 @@ The following are the command-line options:
 
 ``-p, --show-percentile``
  Prints the latency percentile distribution (p50, p75, p90, p95, p99, p99.9,
- p99.99) of per-burst latencies for the encoder and decoder latency tests.
+ p99.99, p99.995, p99.999) of per-burst latencies for the encoder and decoder latency tests.
 
 Test Cases
 ~~~~~~~~~~

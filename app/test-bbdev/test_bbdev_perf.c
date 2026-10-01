@@ -5604,7 +5604,7 @@ record_latency_sample(uint64_t t)
 static void
 print_latency_percentiles(void)
 {
-	static const double pcts[] = {50.0, 75.0, 90.0, 95.0, 99.0, 99.9, 99.99};
+	static const double pcts[] = {50.0, 75.0, 90.0, 95.0, 99.0, 99.9, 99.99, 99.995, 99.999};
 	unsigned int p;
 	uint32_t i;
 	uint64_t cum = 0;
