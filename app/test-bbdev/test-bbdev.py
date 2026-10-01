@@ -63,6 +63,10 @@ parser.add_argument("-l", "--num-lcores",
 parser.add_argument("-i", "--init-device",
                     action='store_true',
                     help="Initialise PF device with default values.")
+parser.add_argument("-p", "--show-percentile",
+                    action='store_true',
+                    help="Print latency percentile distribution for "
+                    "encoder/decoder latency tests.")
 
 args = parser.parse_args()
 
@@ -94,6 +98,9 @@ if args.test_cases:
 
 if args.init_device:
     params.extend(["-i"])
+
+if args.show_percentile:
+    params.extend(["-p"])
 
 
 exit_status = 0

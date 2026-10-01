@@ -5552,6 +5552,83 @@ throughput_test(struct active_device *ad,
 	return ret;
 }
 
+/*
+ * Fixed-size log-linear histogram of per-burst latency deltas (CPU cycles),
+ * in the spirit of netperf's bucket histograms: memory use is constant
+ * regardless of test duration. Each power of two is split into
+ * LAT_HIST_SUB linear sub-buckets (~6% resolution).
+ */
+#define LAT_HIST_SUB_BITS 4
+#define LAT_HIST_SUB (1U << LAT_HIST_SUB_BITS)
+#define LAT_HIST_BUCKETS (64 * LAT_HIST_SUB)
+
+static uint64_t *lat_hist;
+static uint64_t lat_hist_total;
+
+static inline uint32_t
+lat_hist_index(uint64_t v)
+{
+	uint32_t e;
+
+	if (v < LAT_HIST_SUB)
+		return (uint32_t)v;
+	e = 63 - rte_clz64(v);
+	return (e - LAT_HIST_SUB_BITS + 1) * LAT_HIST_SUB +
+			(uint32_t)((v >> (e - LAT_HIST_SUB_BITS)) & (LAT_HIST_SUB - 1));
+}
+
+/* Largest value that maps into bucket idx */
+static uint64_t
+lat_hist_upper(uint32_t idx)
+{
+	uint32_t e, sub;
+
+	if (idx < LAT_HIST_SUB)
+		return idx;
+	e = idx / LAT_HIST_SUB + LAT_HIST_SUB_BITS - 1;
+	sub = idx % LAT_HIST_SUB;
+	if (e >= 64)
+		return UINT64_MAX;
+	return ((((uint64_t)LAT_HIST_SUB + sub + 1) << (e - LAT_HIST_SUB_BITS)) - 1);
+}
+
+static void
+record_latency_sample(uint64_t t)
+{
+	if (lat_hist == NULL)
+		return;
+	lat_hist[lat_hist_index(t)]++;
+	lat_hist_total++;
+}
+
+static void
+print_latency_percentiles(void)
+{
+	static const double pcts[] = {50.0, 75.0, 90.0, 95.0, 99.0, 99.9, 99.99, 99.995, 99.999};
+	unsigned int p;
+	uint32_t i;
+	uint64_t cum = 0;
+
+	if (lat_hist == NULL || lat_hist_total == 0)
+		return;
+
+	printf("Latency percentile distribution (%" PRIu64 " samples, bucketed, upper bounds):\n",
+			lat_hist_total);
+	i = 0;
+	for (p = 0; p < RTE_DIM(pcts); p++) {
+		uint64_t target = (uint64_t)ceil(pcts[p] / 100.0 * (double)lat_hist_total);
+		uint64_t v;
+
+		if (target == 0)
+			target = 1;
+		while (i < LAT_HIST_BUCKETS - 1 && cum + lat_hist[i] < target)
+			cum += lat_hist[i++];
+		v = lat_hist_upper(i);
+		printf("\tp%-6g: <= %" PRIu64 " cycles, %lg us\n", pcts[p], v,
+				(double)v * 1000000.0 / (double)rte_get_tsc_hz());
+	}
+}
+
 static int
 latency_test_dec(struct rte_mempool *mempool,
 		struct test_buffers *bufs, struct rte_bbdev_dec_op *ref_op,
@@ -5619,6 +5696,7 @@ latency_test_dec(struct rte_mempool *mempool,
 		*max_time = RTE_MAX(*max_time, last_time);
 		*min_time = RTE_MIN(*min_time, last_time);
 		*total_time += last_time;
+		record_latency_sample(last_time);
 
 		if (test_vector.op_type != RTE_BBDEV_OP_NONE) {
 			ret = validate_dec_op(ops_deq, burst_sz, ref_op);
@@ -5723,6 +5801,7 @@ latency_test_ldpc_dec(struct rte_mempool *mempool,
 		*max_time = RTE_MAX(*max_time, last_time);
 		*min_time = RTE_MIN(*min_time, last_time);
 		*total_time += last_time;
+		record_latency_sample(last_time);
 
 		if (extDdr)
 			retrieve_harq_ddr(dev_id, queue_id, ops_enq, burst_sz);
@@ -5798,6 +5877,7 @@ latency_test_enc(struct rte_mempool *mempool,
 		*max_time = RTE_MAX(*max_time, last_time);
 		*min_time = RTE_MIN(*min_time, last_time);
 		*total_time += last_time;
+		record_latency_sample(last_time);
 
 		if (test_vector.op_type != RTE_BBDEV_OP_NONE) {
 			ret = validate_enc_op(ops_deq, burst_sz, ref_op);
@@ -5873,6 +5953,7 @@ latency_test_ldpc_enc(struct rte_mempool *mempool,
 		*max_time = RTE_MAX(*max_time, last_time);
 		*min_time = RTE_MIN(*min_time, last_time);
 		*total_time += last_time;
+		record_latency_sample(last_time);
 
 		if (test_vector.op_type != RTE_BBDEV_OP_NONE) {
 			ret = validate_ldpc_enc_op(ops_deq, burst_sz, ref_op);
@@ -6058,6 +6139,15 @@ validation_latency_test(struct active_device *ad,
 	op_type_str = rte_bbdev_op_type_str(op_type);
 	TEST_ASSERT_NOT_NULL(op_type_str, "Invalid op type: %u", op_type);
 
+	lat_hist_total = 0;
+	if (get_show_percentile() && (op_type == RTE_BBDEV_OP_TURBO_ENC ||
+			op_type == RTE_BBDEV_OP_LDPC_ENC ||
+			op_type == RTE_BBDEV_OP_TURBO_DEC ||
+			op_type == RTE_BBDEV_OP_LDPC_DEC)) {
+		lat_hist = rte_zmalloc(NULL,
+				sizeof(uint64_t) * LAT_HIST_BUCKETS, 0);
+	}
+
 	printf("+ ------------------------------------------------------- +\n");
 	if (latency_flag)
 		printf("== test: latency\ndev:");
@@ -6106,8 +6196,11 @@ validation_latency_test(struct active_device *ad,
                       &min_time, &max_time);
 	} while (lat_tsc_end && rte_rdtsc_precise() < lat_tsc_end);
 
-	if (iter <= 0)
+	if (iter <= 0) {
+		rte_free(lat_hist);
+		lat_hist = NULL;
 		return TEST_FAILED;
+	}
 
 	printf("Operation latency:\n"
 			"\tavg: %lg cycles, %lg us\n"
@@ -6119,6 +6212,10 @@ validation_latency_test(struct active_device *ad,
 			(double)(min_time * 1000000) / (double)rte_get_tsc_hz(),
 			(double)max_time, (double)(max_time * 1000000) /
 			(double)rte_get_tsc_hz());
+
+	print_latency_percentiles();
+	rte_free(lat_hist);
+	lat_hist = NULL;
 
 	return TEST_SUCCESS;
 }
