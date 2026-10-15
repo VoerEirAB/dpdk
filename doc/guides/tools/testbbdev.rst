@@ -92,6 +92,10 @@ The following are the command-line options:
  Specifies for LDPC decoder operations the SNR in dB used when generating LLRs
  for bler tests. If not specified snr is set to 0 dB.
 
+``-p, --show-percentile``
+ Prints the latency percentile distribution (p50, p75, p90, p95, p99, p99.9,
+ p99.99) of per-burst latencies for the encoder and decoder latency tests.
+
 Test Cases
 ~~~~~~~~~~
 

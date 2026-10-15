@@ -124,6 +124,8 @@ double get_snr(void);
 
 unsigned int get_iter_max(void);
 
+bool get_show_percentile(void);
+
 bool get_init_device(void);
 
 uint32_t get_duration_sec(void);
