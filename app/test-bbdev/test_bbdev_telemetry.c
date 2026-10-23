@@ -38,6 +38,8 @@ handle_bbdev_stats(const char *cmd __rte_unused, const char *params,
 	if (params == NULL || params[0] == '\0')
 		return -EINVAL;
 	errno = 0;
+if (params[0] < '0' || params[0] > '9')
+		return -EINVAL;
 	dev_id = strtoul(params, &end, 10);
 	if (errno != 0 || *end != '\0' || dev_id >= RTE_BBDEV_MAX_DEVS)
 		return -EINVAL;
