@@ -938,3 +938,11 @@ Following statuses can be used:
 
     expected_status =
     OK
+
+Telemetry
+---------
+
+``dpdk-test-bbdev`` registers the following telemetry commands:
+
+* ``/bbdev/list``: list the IDs of all BBDev devices.
+* ``/bbdev/stats,<device_id>``: get the statistics of the given BBDev device.
