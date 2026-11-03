@@ -224,7 +224,7 @@ parse_args(int argc, char **argv, struct test_params *tp)
 	};
 	tp->iter_max = DEFAULT_ITER;
 
-	while ((opt = getopt_long(argc, argv, "hinP:b:c:v:l:s:t:d:", lgopts,
+	while ((opt = getopt_long(argc, argv, "hiPn:b:c:v:l:s:t:d:", lgopts,
 			&option_index)) != EOF)
 		switch (opt) {
 		case 'n':
