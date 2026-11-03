@@ -6,8 +6,9 @@ sources = files(
         'test_bbdev.c',
         'test_bbdev_perf.c',
         'test_bbdev_vector.c',
+        'test_bbdev_telemetry.c',
 )
-deps += ['bbdev', 'bus_vdev']
+deps += ['bbdev', 'bus_vdev', 'telemetry']
 if dpdk_conf.has('RTE_BASEBAND_FPGA_LTE_FEC')
     deps += ['baseband_fpga_lte_fec']
 endif
